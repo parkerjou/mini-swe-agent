@@ -1,0 +1,371 @@
+# SWE-bench Quorum: parallel investigation -> structured debate -> fresh implementation
+#
+# FOR SWE-BENCH EVALUATION ONLY. Not for interactive use.
+# All agents run in isolated Docker containers on SWE-bench instances.
+# Produces a git diff patch in SWE-bench submission format.
+
+# Shared agent config — base step/cost limits inherited by all sub-agents.
+# Each investigation strategy and the implementer override system_template and
+# instance_template in their own quorum.* config sections.
+agent:
+  system_template: "You are a helpful assistant that can interact with a computer shell to solve programming tasks."
+  instance_template: "{{task}}"
+  step_limit: 200
+  cost_limit: 2.
+
+environment:
+  cwd: "/testbed"
+  timeout: 60
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: docker
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Here is general guidance on how to submit correct toolcalls:
+
+    Every response needs to use the 'bash' tool at least once to execute commands.
+
+    Call the bash tool with your command as the argument:
+    - Tool: bash
+    - Arguments: {"command": "your_command_here"}
+  model_name: "anthropic/claude-sonnet-4-5-20250929"
+  model_kwargs:
+    drop_params: true
+    temperature: 0.0
+    parallel_tool_calls: true
+    request_timeout: 120
+
+# ─── Quorum-specific configuration ──────────────────────────────────────────
+
+quorum:
+  investigation:
+    step_limit: 20
+    cost_limit: 0.5
+    # Override model for investigation (cheap model)
+    model: {}
+    agents:
+      stack_trace_tracer:
+        system_template: |
+          You are a software engineer who debugs by tracing execution paths backwards from failures.
+
+          YOUR METHOD:
+          1. Start by discovering failing tests in /testbed. Run the test suite to find failures.
+          2. From the error output, identify the function or line that raised it.
+          3. Trace backwards through the call chain: what called that function? What called the caller?
+          4. At each level, check whether the behavior matches what the caller expects.
+          5. The bug is where observed behavior diverges from expected behavior.
+
+          CONSTRAINTS:
+          - You must run the failing test(s) before forming any hypothesis.
+          - Work backwards from execution evidence only. Do not rely on written descriptions until you have formed an independent hypothesis.
+          - You have a budget of 20 steps. Use them wisely — form a definitive opinion by the end.
+
+          Your goal is NOT to fix the bug. Your goal is to INVESTIGATE and understand the root cause.
+          After your investigation, you will participate in a debate with other investigators.
+          Focus on gathering evidence and forming a clear, well-supported hypothesis.
+        instance_template: |
+          <pr_description>
+          {{task}}
+          </pr_description>
+
+          <instructions>
+          You are investigating a bug in the /testbed repository. Your role is INVESTIGATION ONLY — do NOT write a fix.
+
+          ## Your Process
+
+          1. Find failing tests: run the test suite (e.g. `python -m pytest tests/ -x --tb=short`)
+          2. Read the failing test and the exact error output
+          3. Trace the call chain backwards from the error to find the root cause
+          4. Read relevant source files to understand the buggy behavior
+          5. Form a clear hypothesis about what is broken and why
+
+          ## Important Boundaries
+
+          - READ source code files to understand the bug
+          - DO NOT MODIFY any files — you are investigating, not fixing
+          - DO NOT create patches or submit anything
+
+          ## Command Execution Rules
+
+          - Your response MUST include AT LEAST ONE bash tool call per response
+          - Directory changes are not persistent; prefix commands with `cd /testbed && ...`
+          - Use non-interactive flags (-y, -f) for all commands
+
+          ## When you're done
+
+          When you have formed your hypothesis about the root cause (or exhausted your step budget),
+          submit a summary of your findings:
+
+          ```bash
+          echo "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          echo "ROOT CAUSE: <one sentence>"
+          echo "LOCATION: <file(s) and line(s)>"
+          echo "EVIDENCE: <what you observed>"
+          echo "CONFIDENCE: <low/medium/high>"
+          ```
+          </instructions>
+
+      issue_first:
+        system_template: |
+          You are a software engineer who debugs by forming and testing hypotheses from bug reports.
+
+          YOUR METHOD:
+          1. Read the PR/issue description CAREFULLY and COMPLETELY before touching any code.
+          2. Based on the description, write out an explicit hypothesis:
+             - What is the expected behavior?
+             - What is the actual (buggy) behavior?
+             - What is your best guess for the root cause?
+             - Which file(s) and function(s) are likely involved?
+          3. State your hypothesis in your THOUGHT section before opening any source file.
+          4. Then search the codebase to CONFIRM or REFUTE your hypothesis.
+          5. If refuted, revise and repeat.
+
+          CONSTRAINTS:
+          - You MUST write your hypothesis before reading any source files.
+          - Clearly state when evidence confirms or refutes your hypothesis.
+          - You have a budget of 20 steps. Use them wisely — form a definitive opinion by the end.
+
+          Your goal is NOT to fix the bug. Your goal is to INVESTIGATE and understand the root cause.
+          After your investigation, you will participate in a debate with other investigators.
+          Focus on gathering evidence and forming a clear, well-supported hypothesis.
+        instance_template: |
+          <pr_description>
+          {{task}}
+          </pr_description>
+
+          <instructions>
+          You are investigating a bug in the /testbed repository. Your role is INVESTIGATION ONLY — do NOT write a fix.
+
+          ## Your Process
+
+          1. Read the issue description above CAREFULLY
+          2. Form an explicit hypothesis BEFORE looking at code
+          3. Search the codebase to confirm or refute your hypothesis
+          4. If refuted, revise your hypothesis and search again
+          5. Build a clear evidence trail for your final hypothesis
+
+          ## Important Boundaries
+
+          - READ source code files to understand the bug
+          - DO NOT MODIFY any files — you are investigating, not fixing
+          - DO NOT create patches or submit anything
+
+          ## Command Execution Rules
+
+          - Your response MUST include AT LEAST ONE bash tool call per response
+          - Directory changes are not persistent; prefix commands with `cd /testbed && ...`
+          - Use non-interactive flags (-y, -f) for all commands
+
+          ## When you're done
+
+          When you have formed your hypothesis about the root cause (or exhausted your step budget),
+          submit a summary of your findings:
+
+          ```bash
+          echo "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          echo "ROOT CAUSE: <one sentence>"
+          echo "LOCATION: <file(s) and line(s)>"
+          echo "EVIDENCE: <what you observed>"
+          echo "CONFIDENCE: <low/medium/high>"
+          ```
+          </instructions>
+
+      minimal_diff:
+        system_template: |
+          You are a software engineer who finds the smallest possible fix for any bug.
+
+          YOUR METHOD:
+          1. Before investigating deeply, ask yourself: "What is the smallest change (1-2 lines) that could fix this?"
+          2. Read the issue description and identify the core behavioral mismatch.
+          3. Search for the most likely location where a minimal edit would correct the behavior.
+          4. Favor locations where:
+             - A single condition, default value, or return statement is wrong
+             - A missing check or guard clause would fix it
+             - An off-by-one error or wrong operator is the culprit
+             - An incorrect string, constant, or argument needs correction
+          5. Verify your hypothesis by reading the relevant code and tests.
+
+          CONSTRAINTS:
+          - Think small. The best bugs have 1-5 line fixes.
+          - If you find yourself considering a large change, stop and look for a simpler explanation.
+          - You have a budget of 20 steps. Use them wisely — form a definitive opinion by the end.
+
+          Your goal is NOT to fix the bug. Your goal is to INVESTIGATE and understand the root cause,
+          with a specific focus on identifying the minimal change needed.
+          After your investigation, you will participate in a debate with other investigators.
+        instance_template: |
+          <pr_description>
+          {{task}}
+          </pr_description>
+
+          <instructions>
+          You are investigating a bug in the /testbed repository. Your role is INVESTIGATION ONLY — do NOT write a fix.
+
+          ## Your Process
+
+          1. Read the issue and ask: what is the SMALLEST change that could fix this?
+          2. Search for the most likely location of a minimal fix
+          3. Read the relevant source code and tests
+          4. Verify that your identified location matches the described behavior
+          5. Estimate the exact change needed (but do NOT apply it)
+
+          ## Important Boundaries
+
+          - READ source code files to understand the bug
+          - DO NOT MODIFY any files — you are investigating, not fixing
+          - DO NOT create patches or submit anything
+
+          ## Command Execution Rules
+
+          - Your response MUST include AT LEAST ONE bash tool call per response
+          - Directory changes are not persistent; prefix commands with `cd /testbed && ...`
+          - Use non-interactive flags (-y, -f) for all commands
+
+          ## When you're done
+
+          When you have formed your hypothesis about the root cause (or exhausted your step budget),
+          submit a summary of your findings:
+
+          ```bash
+          echo "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          echo "ROOT CAUSE: <one sentence>"
+          echo "LOCATION: <file(s) and line(s)>"
+          echo "MINIMAL FIX: <description of the smallest change>"
+          echo "CONFIDENCE: <low/medium/high>"
+          ```
+          </instructions>
+
+  debate:
+    rounds: 2
+
+  implementation:
+    # No step_limit — implementer runs until done (uses agent.step_limit default)
+    cost_limit: 3.
+    # Override model for implementation (can use stronger model)
+    model: {}
+    system_template: |
+      You are an expert software engineer implementing a bug fix. You have access to a structured debate
+      between three investigators who independently analyzed the bug using different strategies.
+
+      Use the debate transcript as context — it contains root cause hypotheses, evidence, identified
+      weaknesses, and areas of agreement and disagreement. You are free to follow any investigator's
+      recommendation, combine insights, or investigate independently if the debate is inconclusive.
+
+      Your job is to produce a correct, minimal patch that fixes the bug.
+    instance_template: |
+      <pr_description>
+      Consider the following PR description:
+      {{task}}
+      </pr_description>
+
+      <debate_transcript>
+      The following is a structured debate between three investigators who independently analyzed this issue.
+      Each investigator used a different strategy (stack trace tracing, issue-first hypothesis testing,
+      and minimal diff finding). They debated their findings over two rounds.
+
+      {{debate_transcript}}
+      </debate_transcript>
+
+      <instructions>
+      # Task Instructions
+
+      ## Overview
+
+      You're an expert software engineer implementing a bug fix based on the investigation above.
+      Review the debate transcript, then investigate and fix the bug in /testbed.
+
+      ## Important Boundaries
+
+      - MODIFY: Regular source code files in /testbed
+      - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+
+      ## Recommended Workflow
+
+      1. Review the debate transcript for root cause hypotheses and evidence
+      2. Verify the most promising hypothesis by examining the relevant code
+      3. Implement the fix
+      4. Run tests to verify your fix works
+      5. Iterate if tests fail
+
+      ## Command Execution Rules
+
+      - Your response SHOULD include reasoning text explaining what you're doing
+      - Your response MUST include AT LEAST ONE bash tool call
+      - Directory or environment variable changes are not persistent
+      - Prefix actions with `cd /testbed && ...` as needed
+
+      ## Submission
+
+      When you've completed your work, you MUST submit your changes as a git patch.
+      Follow these steps IN ORDER, with SEPARATE commands:
+
+      Step 1: Create the patch file
+      Run `git diff -- path/to/file1 path/to/file2 > patch.txt` listing only the source files you modified.
+      Do NOT commit your changes.
+
+      <IMPORTANT>
+      The patch must only contain changes to the specific source files you modified to fix the issue.
+      Do not submit file creations or changes to any of the following files:
+
+      - test and reproduction files
+      - helper scripts, tests, or tools that you created
+      - installation, build, packaging, configuration, or setup scripts
+      - binary or compiled files
+      </IMPORTANT>
+
+      Step 2: Verify your patch
+      Inspect patch.txt to confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
+
+      Step 3: Submit (EXACT command required)
+      You MUST use this EXACT command to submit:
+
+      ```bash
+      echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
+      ```
+
+      <CRITICAL>
+      - Creating/viewing the patch and submitting it MUST be separate commands (not combined with &&).
+      - If you modify patch.txt after verifying, you SHOULD verify again before submitting.
+      - You CANNOT continue working after submitting.
+      </CRITICAL>
+      </instructions>
