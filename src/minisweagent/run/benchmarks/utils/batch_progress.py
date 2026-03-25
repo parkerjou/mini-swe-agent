@@ -142,6 +142,19 @@ class RunBatchProgressManager:
                 instance_id=instance_id,
             )
 
+    def remove_spinner(self, instance_id: str) -> None:
+        """Remove a spinner task without advancing the main progress bar.
+
+        Safe to call if the spinner doesn't exist or was already removed.
+        """
+        with self._lock:
+            task_id = self._spinner_tasks.pop(instance_id, None)
+            if task_id is not None:
+                try:
+                    self._task_progress_bar.remove_task(task_id)
+                except KeyError:
+                    pass
+
     def on_instance_end(self, instance_id: str, exit_status: str | None) -> None:
         with self._lock:
             self._instances_by_exit_status[exit_status].append(instance_id)
