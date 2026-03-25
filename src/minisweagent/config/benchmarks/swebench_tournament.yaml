@@ -165,6 +165,7 @@ model:
     drop_params: true
     temperature: 0.0
     parallel_tool_calls: true
+    request_timeout: 120
 
 # ─── Tournament-specific configuration ────────────────────────────────────────
 
