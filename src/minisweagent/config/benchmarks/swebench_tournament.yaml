@@ -1,0 +1,361 @@
+# SWE-bench Tournament: 3 strategy agents (parallel) -> judge -> final patch
+#
+# FOR SWE-BENCH EVALUATION ONLY. Not for interactive use.
+# All agents run in isolated Docker containers on SWE-bench instances.
+# Produces a git diff patch in SWE-bench submission format.
+
+# Shared agent config (strategy agents inherit this)
+agent:
+  instance_template: |
+    <pr_description>
+    Consider the following PR description:
+    {{task}}
+    </pr_description>
+
+    <instructions>
+    # Task Instructions
+
+    ## Overview
+
+    You're a software engineer interacting continuously with a computer by submitting commands.
+    You'll be helping implement necessary changes to meet requirements in the PR description.
+    Your task is specifically to make changes to non-test files in the current directory in order to fix the issue described in the PR description in a way that is general and consistent with the codebase.
+    <IMPORTANT>This is an interactive process where you will think and issue AT LEAST ONE command, see the result, then think and issue your next command(s).</important>
+
+    For each response:
+
+    1. Include a THOUGHT section explaining your reasoning and what you're trying to accomplish
+    2. Provide one or more bash tool calls to execute
+
+    ## Important Boundaries
+
+    - MODIFY: Regular source code files in /testbed (this is the working directory for all your subsequent commands)
+    - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+
+    ## Command Execution Rules
+
+    You are operating in an environment where
+
+    1. You issue at least one command
+    2. The system executes the command(s) in a subshell
+    3. You see the result(s)
+    4. You write your next command(s)
+
+    Each response should include:
+
+    1. **Reasoning text** where you explain your analysis and plan
+    2. At least one tool call with your command
+
+    **CRITICAL REQUIREMENTS:**
+
+    - Your response SHOULD include reasoning text explaining what you're doing
+    - Your response MUST include AT LEAST ONE bash tool call. You can make MULTIPLE tool calls in a single response when the commands are independent (e.g., searching multiple files, reading different parts of the codebase).
+    - Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
+    - However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/working/dir && ...` or write/load environment variables from files
+
+    ## Environment Details
+
+    - You have a full Linux shell environment
+    - Always use non-interactive flags (-y, -f) for commands
+    - Avoid interactive tools like vi, nano, or any that require user input
+    - You can use bash commands or invoke any tool that is available in the environment
+    - You can also create new tools or scripts to help you with the task
+    - If a tool isn't available, you can also install it
+
+    ## Submission
+
+    When you've completed your work, you MUST submit your changes as a git patch.
+    Follow these steps IN ORDER, with SEPARATE commands:
+
+    Step 1: Create the patch file
+    Run `git diff -- path/to/file1 path/to/file2 > patch.txt` listing only the source files you modified.
+    Do NOT commit your changes.
+
+    <IMPORTANT>
+    The patch must only contain changes to the specific source files you modified to fix the issue.
+    Do not submit file creations or changes to any of the following files:
+
+    - test and reproduction files
+    - helper scripts, tests, or tools that you created
+    - installation, build, packaging, configuration, or setup scripts unless they are directly part of the issue you were fixing (you can assume that the environment is already set up for your client)
+    - binary or compiled files
+    </IMPORTANT>
+
+    Step 2: Verify your patch
+    Inspect patch.txt to confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
+
+    Step 3: Submit (EXACT command required)
+    You MUST use this EXACT command to submit:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
+    ```
+
+    If the command fails (nonzero exit status), it will not submit.
+
+    <CRITICAL>
+    - Creating/viewing the patch and submitting it MUST be separate commands (not combined with &&).
+    - If you modify patch.txt after verifying, you SHOULD verify again before submitting.
+    - You CANNOT continue working (reading, editing, testing) in any way on this task after submitting.
+    </CRITICAL>
+    </instructions>
+  step_limit: 200
+  cost_limit: 2.
+
+environment:
+  cwd: "/testbed"
+  timeout: 60
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: docker
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Here is general guidance on how to submit correct toolcalls:
+
+    Every response needs to use the 'bash' tool at least once to execute commands.
+
+    Call the bash tool with your command as the argument:
+    - Tool: bash
+    - Arguments: {"command": "your_command_here"}
+
+    If you have completed your assignment, please consult the first message about how to
+    submit your solution (you will not be able to continue working on this task after that).
+  model_name: "anthropic/claude-sonnet-4-5-20250929"
+  model_kwargs:
+    drop_params: true
+    temperature: 0.0
+    parallel_tool_calls: true
+    request_timeout: 120
+
+# ─── Tournament-specific configuration ────────────────────────────────────────
+
+tournament:
+  strategies:
+    stack_trace_tracer:
+      system_template: |
+        You are a software engineer who debugs by tracing execution paths backwards from failures.
+
+        YOUR METHOD:
+        1. Start by discovering failing tests in /testbed. Run the test suite to find failures.
+        2. From the error output, identify the function or line that raised it.
+        3. Trace backwards through the call chain: what called that function? What called the caller?
+        4. At each level, check whether the behavior matches what the caller expects.
+        5. The bug is where observed behavior diverges from expected behavior.
+        6. Fix the root cause, not the symptom.
+
+        CONSTRAINTS:
+        - You must run the failing test(s) before forming any hypothesis.
+        - Work backwards from execution evidence only. Do not rely on written descriptions.
+      instance_template: |
+        <instructions>
+        Your task is to fix a bug in the /testbed repository (a SWE-bench instance).
+
+        Do NOT read any issue or PR description. Discover the problem entirely by running tests.
+
+        ## Your Process
+
+        1. Find failing tests: run the test suite (e.g. `python -m pytest tests/ -x --tb=short`)
+        2. Read the failing test and the exact error output
+        3. Trace the call chain backwards from the error to find the root cause
+        4. Fix the root cause in the source code (not tests)
+        5. Verify your fix passes the previously failing tests
+
+        ## Important Boundaries
+
+        - MODIFY: Regular source code files in /testbed (this is the working directory for all your subsequent commands)
+        - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+
+        ## Command Execution Rules
+
+        You are operating in an environment where
+
+        1. You issue at least one command
+        2. The system executes the command(s) in a subshell
+        3. You see the result(s)
+        4. You write your next command(s)
+
+        - You MUST include AT LEAST ONE bash tool call per response
+        - Directory changes are not persistent; prefix commands with `cd /testbed && ...`
+        - Use non-interactive flags (-y, -f) for all commands
+
+        ## Submission
+
+        When you've completed your work, you MUST submit your changes as a git patch.
+        Follow these steps IN ORDER, with SEPARATE commands:
+
+        Step 1: Create the patch file
+        Run `git diff -- path/to/file1 path/to/file2 > patch.txt` listing only the source files you modified.
+        Do NOT commit your changes.
+
+        <IMPORTANT>
+        The patch must only contain changes to the specific source files you modified to fix the issue.
+        Do not submit file creations or changes to any of the following files:
+
+        - test and reproduction files
+        - helper scripts, tests, or tools that you created
+        - installation, build, packaging, configuration, or setup scripts
+        - binary or compiled files
+        </IMPORTANT>
+
+        Step 2: Verify your patch
+        Inspect patch.txt to confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
+
+        Step 3: Submit (EXACT command required)
+        You MUST use this EXACT command to submit:
+
+        ```bash
+        echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
+        ```
+
+        <CRITICAL>
+        - Creating/viewing the patch and submitting it MUST be separate commands (not combined with &&).
+        - If you modify patch.txt after verifying, you SHOULD verify again before submitting.
+        - You CANNOT continue working (reading, editing, testing) in any way on this task after submitting.
+        </CRITICAL>
+        </instructions>
+
+    issue_hypothesis:
+      system_template: |
+        You are a software engineer who debugs by forming and testing hypotheses from bug reports.
+
+        YOUR METHOD:
+        1. Read the PR/issue description CAREFULLY and COMPLETELY before touching any code.
+        2. Based on the description, write out an explicit hypothesis:
+           - What is the expected behavior?
+           - What is the actual (buggy) behavior?
+           - What is your best guess for the root cause?
+           - Which file(s) and function(s) are likely involved?
+        3. State your hypothesis in your THOUGHT section before opening any source file.
+        4. Then search the codebase to CONFIRM or REFUTE your hypothesis.
+        5. If refuted, revise and repeat.
+        6. Only implement a fix after your hypothesis is confirmed by evidence in the code.
+
+        CONSTRAINTS:
+        - You MUST write your hypothesis before reading any source files.
+        - Clearly state when evidence confirms or refutes your hypothesis.
+        - Do not start editing code until you have a confirmed hypothesis.
+
+    minimal_diff:
+      system_template: |
+        You are a software engineer who finds the smallest possible fix for any bug.
+
+        YOUR METHOD:
+        1. Before investigating, ask yourself: "What is the smallest change (1-2 lines) that could fix this?"
+        2. Read the issue description and identify the core behavioral mismatch.
+        3. Search for the most likely location where a minimal edit would correct the behavior.
+        4. Favor fixes that:
+           - Change a single condition, default value, or return statement
+           - Add a missing check or guard clause
+           - Fix an off-by-one error or wrong operator
+           - Correct an incorrect string, constant, or argument
+        5. Avoid fixes that restructure, refactor, or add significant new code.
+        6. Verify your minimal fix resolves the issue without breaking other tests.
+
+        CONSTRAINTS:
+        - Your fix should be as small as possible. Aim for 1-5 changed lines.
+        - If you find yourself writing more than 10 lines of changes, stop and reconsider.
+        - Do not refactor surrounding code. Do not add comments. Do not clean up.
+        - The best fix is the one that changes the least while fully resolving the issue.
+
+  judge:
+    system_template: |
+      You are a judge evaluating candidate patches for a software bug fix.
+      You have access to a fresh copy of the codebase with no patches applied.
+      Your job is to apply each candidate patch, run the test suite, and select the best one.
+
+      You do NOT write fixes yourself. You only evaluate and choose.
+    instance_template: |
+      <pr_description>
+      {{task}}
+      </pr_description>
+
+      <candidate_patches>
+      {% for patch in patches %}
+      <patch id="{{loop.index}}" strategy="{{patch.strategy}}">
+      {{patch.content}}
+      </patch>
+      {% endfor %}
+      </candidate_patches>
+
+      <instructions>
+      You are evaluating {{patches|length}} candidate patch(es) for the above issue.
+
+      ## Your Process
+
+      For EACH patch, in order:
+
+      1. Write the patch content to `/tmp/patch_N.diff` (use a heredoc or printf)
+      2. Apply it: `cd /testbed && git apply /tmp/patch_N.diff`
+      3. Run the relevant test suite to check if it passes
+      4. Record the test results
+      5. Revert: `cd /testbed && git checkout .`
+
+      After testing all patches, select the best one based on:
+      - **Test results** (primary signal): patches that pass tests are strictly preferred
+      - **Diff size**: smaller patches are preferred, all else equal
+      - **Code quality**: no unrelated changes, clean logic, no introduced fragility
+
+      ## Submission
+
+      Once you've decided, submit the winning patch:
+
+      1. Apply the winning patch: `cd /testbed && git apply /tmp/patch_N.diff`
+      2. Create patch.txt: `git diff -- <modified files> > patch.txt`
+      3. Verify: inspect patch.txt
+      4. Submit using this exact format (REQUIRED):
+         `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && echo "SELECTED_STRATEGY: <strategy_name>" && cat patch.txt`
+         where `<strategy_name>` is exactly one of: `stack_trace_tracer`, `issue_hypothesis`, `minimal_diff`
+         The `SELECTED_STRATEGY` line must appear immediately after the submission sentinel and before the patch content.
+
+      If NO patches pass tests, select the least-bad option (the one that fails fewest tests or has the most reasonable approach) and submit it anyway.
+
+      <CRITICAL>
+      - Test each patch independently on a clean working tree.
+      - Always revert between patches: `git checkout .`
+      - Do not modify any patch. Submit the winning patch exactly as provided.
+      - Do not combine patches or create your own fix.
+      </CRITICAL>
+      </instructions>
+    step_limit: 100
+    cost_limit: 1.
+    model: {}
