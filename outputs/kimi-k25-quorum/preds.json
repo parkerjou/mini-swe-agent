@@ -1,0 +1,52 @@
+{
+  "marshmallow-code__marshmallow-1359": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "marshmallow-code__marshmallow-1359",
+    "model_patch": "diff --git a/src/marshmallow/fields.py b/src/marshmallow/fields.py\nindex 0b18e7dd..55e36e26 100644\n--- a/src/marshmallow/fields.py\n+++ b/src/marshmallow/fields.py\n@@ -1114,7 +1114,7 @@ class DateTime(Field):\n         super()._bind_to_schema(field_name, schema)\n         self.format = (\n             self.format\n-            or getattr(schema.opts, self.SCHEMA_OPTS_VAR_NAME)\n+            or getattr(self.root.opts, self.SCHEMA_OPTS_VAR_NAME)\n             or self.DEFAULT_FORMAT\n         )\n \n"
+  },
+  "sqlfluff__sqlfluff-2419": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "sqlfluff__sqlfluff-2419",
+    "model_patch": "diff --git a/src/sqlfluff/rules/L060.py b/src/sqlfluff/rules/L060.py\nindex 836941edc..853ceeb6f 100644\n--- a/src/sqlfluff/rules/L060.py\n+++ b/src/sqlfluff/rules/L060.py\n@@ -59,4 +59,8 @@ class Rule_L060(BaseRule):\n             ],\n         )\n \n-        return LintResult(context.segment, [fix])\n+        return LintResult(\n+            context.segment,\n+            [fix],\n+            description=f\"Use 'COALESCE' instead of '{context.segment.raw_upper}'.\",\n+        )\n"
+  },
+  "sqlfluff__sqlfluff-1517": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "sqlfluff__sqlfluff-1517",
+    "model_patch": "diff --git a/src/sqlfluff/core/parser/grammar/delimited.py b/src/sqlfluff/core/parser/grammar/delimited.py\nindex 39a350373..016676521 100644\n--- a/src/sqlfluff/core/parser/grammar/delimited.py\n+++ b/src/sqlfluff/core/parser/grammar/delimited.py\n@@ -186,7 +186,7 @@ class Delimited(OneOf):\n                 else:\n                     # Zero length section between delimiters, or zero code\n                     # elements if appropriate. Return unmatched.\n-                    return MatchResult.from_unmatched(mutated_segments)\n+                    return MatchResult(matched_segments.matched_segments, mutated_segments)\n             else:\n                 # No match for a delimiter looking forward, this means we're\n                 # at the end. In this case we look for a potential partial match\n"
+  },
+  "sqlfluff__sqlfluff-1625": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "sqlfluff__sqlfluff-1625",
+    "model_patch": ""
+  },
+  "pvlib__pvlib-python-1072": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "pvlib__pvlib-python-1072",
+    "model_patch": "diff --git a/pvlib/temperature.py b/pvlib/temperature.py\nindex 1d98736..d4d9d75 100644\n--- a/pvlib/temperature.py\n+++ b/pvlib/temperature.py\n@@ -599,7 +599,7 @@ def fuentes(poa_global, temp_air, wind_speed, noct_installed, module_height=5,\n     # n.b. the way Fuentes calculates the first timedelta makes it seem like\n     # the value doesn't matter -- rather than recreate it here, just assume\n     # it's the same as the second timedelta:\n-    timedelta_hours = np.diff(poa_global.index).astype(float) / 1e9 / 60 / 60\n+    timedelta_hours = np.diff(poa_global.index.values) / np.timedelta64(1, 'h')\n     timedelta_hours = np.append([timedelta_hours[0]], timedelta_hours)\n \n     tamb_array = temp_air + 273.15\n"
+  },
+  "marshmallow-code__marshmallow-1343": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "marshmallow-code__marshmallow-1343",
+    "model_patch": "diff --git a/src/marshmallow/schema.py b/src/marshmallow/schema.py\nindex 085c509b..5dea2853 100644\n--- a/src/marshmallow/schema.py\n+++ b/src/marshmallow/schema.py\n@@ -861,6 +861,8 @@ class BaseSchema(base.SchemaABC):\n         return data\n \n     def _invoke_field_validators(self, unmarshal, data, many):\n+        if data is None:\n+            return\n         for attr_name in self.__processors__[(VALIDATES, False)]:\n             validator = getattr(self, attr_name)\n             validator_kwargs = validator.__marshmallow_kwargs__[(VALIDATES, False)]\n"
+  },
+  "pvlib__pvlib-python-1707": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "pvlib__pvlib-python-1707",
+    "model_patch": "diff --git a/pvlib/iam.py b/pvlib/iam.py\nindex 3eaa6b4..2990b3d 100644\n--- a/pvlib/iam.py\n+++ b/pvlib/iam.py\n@@ -215,6 +215,9 @@ def physical(aoi, n=1.526, K=4.0, L=0.002, *, n_ar=None):\n     # incidence angle modifier\n     iam = (tau_s + tau_p) / 2 / tau_0\n \n+    # for aoi >= 90, the reflectance approaches 1 and transmittance approaches 0\n+    iam = np.where(np.abs(aoi) >= 90.0, 0.0, iam)\n+\n     return iam\n \n \n"
+  },
+  "sqlfluff__sqlfluff-1733": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "sqlfluff__sqlfluff-1733",
+    "model_patch": "diff --git a/src/sqlfluff/rules/L036.py b/src/sqlfluff/rules/L036.py\nindex ed5533b81..ce80793e2 100644\n--- a/src/sqlfluff/rules/L036.py\n+++ b/src/sqlfluff/rules/L036.py\n@@ -118,7 +118,25 @@ class Rule_L036(BaseRule):\n                     loop_while=lambda s: s.is_type(\"whitespace\", \"comma\") or s.is_meta,\n                 )\n                 fixes += [LintFix(\"delete\", ws) for ws in ws_to_delete]\n-                fixes.append(LintFix(\"create\", select_target, NewlineSegment()))\n+                # If this is the first select target and there are other select targets\n+                # already on new lines, add proper indentation to match them.\n+                if i == 0 and select_targets_info.first_whitespace_idx != -1:\n+                    fixes.append(\n+                        LintFix(\n+                            \"create\",\n+                            select_target,\n+                            [\n+                                NewlineSegment(),\n+                                WhitespaceSegment(\n+                                    raw=segment.segments[\n+                                        select_targets_info.first_whitespace_idx\n+                                    ].raw\n+                                ),\n+                            ],\n+                        )\n+                    )\n+                else:\n+                    fixes.append(LintFix(\"create\", select_target, NewlineSegment()))\n         if fixes:\n             return LintResult(anchor=segment, fixes=fixes)\n \n"
+  },
+  "pvlib__pvlib-python-1606": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "pvlib__pvlib-python-1606",
+    "model_patch": "diff --git a/pvlib/tools.py b/pvlib/tools.py\nindex 991568f..7e7257f 100644\n--- a/pvlib/tools.py\n+++ b/pvlib/tools.py\n@@ -348,6 +348,11 @@ def _golden_sect_DataFrame(params, lower, upper, func, atol=1e-8):\n     df['VH'] = upper\n     df['VL'] = lower\n \n+    # handle case where upper == lower (no interval to search)\n+    if np.all(upper == lower):\n+        func_result = func(df, 'VL')\n+        return func_result, df['VL']\n+\n     converged = False\n     iterations = 0\n \n"
+  },
+  "sqlfluff__sqlfluff-1763": {
+    "model_name_or_path": "moonshotai/kimi-k2.5",
+    "instance_id": "sqlfluff__sqlfluff-1763",
+    "model_patch": "diff --git a/src/sqlfluff/core/linter/linted_file.py b/src/sqlfluff/core/linter/linted_file.py\nindex 3a8593edd..8c2c0ea7e 100644\n--- a/src/sqlfluff/core/linter/linted_file.py\n+++ b/src/sqlfluff/core/linter/linted_file.py\n@@ -494,6 +494,6 @@ class LintedFile(NamedTuple):\n                 root, ext = os.path.splitext(fname)\n                 fname = root + suffix + ext\n             # Actually write the file.\n-            with open(fname, \"w\", encoding=self.encoding) as f:\n+            with open(fname, \"w\", encoding=\"utf-8\") as f:\n                 f.write(write_buff)\n         return success\n"
+  }
+}
